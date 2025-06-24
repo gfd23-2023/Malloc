@@ -5,7 +5,7 @@
 .equ STATUS, 0
 .equ TAMANHO, 8
 .equ PROX_LIVRE, 16
-.equ PRO_OCUPADO, 24
+.equ PROX_OCUPADO, 24
 .equ DADOS, 32
 #--------------------------------------------------------------
 
@@ -18,6 +18,7 @@ newline:
 
 .section	.data
 #Variáveis Globais - Inicializações ---------------------------
+	.align 16
 	topoInicialHeap:.quad 0	
 	topoHeap:		.quad 0
 	inicioHeap:		.quad 0
@@ -25,20 +26,37 @@ newline:
 	listaOcupados:	.quad 0			#Lista dos nós ocupadosi
 #--------------------------------------------------------------
 
+.section .bss
+.align 8
+char_buffer:
+    .space 1
+
+
 .section	.text
 .globl		iniciaAlocador, finalizaAlocador, juntaBloco, liberaMem, alocaMem, imprimeMapa, main
 
 #----------------------------------------------------------------------------------------------------------------------
 #Executa syscall brk para obter o endereço do topo da pilha e o armazena em uma variável global
 iniciaAlocador:
-	pushq %rbp						#antiga posição da pilha - montagem RA
-	movq %rsp, %rbp					#passa a nova altura da pinha - montagem RA
-	movq $12, %rax					#move o número da syscall brk para rax
-	xorq %rdi, %rdi					#zera o registrador %rdi (argumento da syscall brk) - topoInicialHeap = sbrk(0)
-	syscall
-	movq %rax, topoHeap				#topoHeap = topoInicialHeap
-	movq %rax, inicioHeap			#inicioHeap = topoInicialHeap
-	ret
+    pushq %rbp
+    movq %rsp, %rbp
+    
+    # Obtém o topo atual da heap
+    movq $12, %rax      # syscall brk
+    xorq %rdi, %rdi     # argumento 0 (obter topo atual)
+    syscall
+    movq %rax, topoInicialHeap
+    movq %rax, inicioHeap
+    movq %rax, topoHeap
+    
+    popq %rbp
+    ret
+    
+erro_inicializacao:
+    # Tratamento de erro
+    movq $-1, %rax
+    popq %rbp
+    ret
 #----------------------------------------------------------------------------------------------------------------------
 #Executa syscall brk para restaurar o topo inicial da Heap	
 finalizaAlocador:
@@ -48,6 +66,7 @@ finalizaAlocador:
 	movq topoInicialHeap, %rdi		#passa o topo inicial como argumento da sbrk
 	syscall
 	movq %rax, topoHeap				#topoHeap = endereço restaurado da heap
+	popq %rbp
 	ret
 #----------------------------------------------------------------------------------------------------------------------
 #Realiza a fusão de dois blocos livres
@@ -57,13 +76,13 @@ juntaBloco:
 	subq $16, %rsp					#espaço para 'bloco = listaLivres' e 'proximo = NULL' - montagem RA
 
 	#Inicialização das variáveis
-	movq listaLivres(%rip), %rax	#rax -> bloco = listaLivres
+	movq listaLivres, %rax	#rax -> bloco = listaLivres
 	movq %rax, -8(%rbp)				#salva rax em -8 x rbp
 	movq $0, -16(%rbp)				#salva 0 em -16 x rbp (proximo = NULL)
 
 while1:
 	testq %rax, %rax				#while (bloco)
-	jle	fim_while1
+	jz	fim_while1
 	
 	#proximo = PROX_LIVRE(bloco)
 	movq -8(%rbp), %rax			#pega o valor local da variável bloco e guarda em rax
@@ -83,18 +102,17 @@ while1:
 	jne nao_fundiu
 
 	#Fundiu, então, atualiza o tamanho do blocão (bloco em rax e rdx, proximo em rbx e rcx)
-	movq 8(%rbx), %rcx			#acessa o campo de tamanho(proximo) e guarda em rcx
-	movq 8(%rax), %rdx			#acesse o campo de tamanho(bloco) e guarda em rdx
-	addq %rdx, %rcx				#soma os dois campos de tamanho
-	addq $32, %rcx				#soma o campo dos dados
-	movq %rcx, 8(%rax)			#salva o novo tamanho dentro do bloco
+	movq 8(%rbx), %rcx          # tamanho do proximo
+	movq 8(%rax), %rdx          # tamanho do bloco
+	addq %rdx, %rcx
+	addq $32, %rcx              # soma cabeçalho do proximo
+	movq %rcx, 8(%rax)          # atualiza novo tamanho no bloco fundido
 
 fim_fusao:
 	#Atualiza os ponteiros do blocão fundido
-	movq 16(%rax), %rdx			#acessa o campo do prox_livre(bloco)
-	movq 16(%rbx), %rcx			#acessa o campo do prox_livre(prox)
-	movq %rdx, 16(%rax)			#salva o novo valor do prox_livre
-	
+	movq 16(%rbx), %rcx         # pega prox_livre do proximo
+	movq %rcx, 16(%rax)         # atualiza no bloco fundido
+
 	movq %rdx, -8(%rbp)			#avança para o próximo bloco
 
 	jmp while1
@@ -103,6 +121,7 @@ nao_fundiu:
 	#Não fundiu, então avança para o próximo bloco da lista de blocos livres
 	movq 16(%rax), %rdx			#acessa o campo do prox_livre(bloco)
 	movq %rdx, -8(%rbp)			#salva o próximo bloco na variável local reservada para ele
+	movq -8(%rbp), %rax
 
 	jmp while1
 
@@ -116,13 +135,13 @@ fim_while1:
 liberaMem:
 	pushq %rbp					#antiga posição na pilha - montagem RA
 	movq %rsp, %rbp				#passa a nova altura da pilha - montagem RA
-	subq $24, %rbp				#separa espaço para as variáveis - montagem RA
+	subq $24, %rsp				#separa espaço para as variáveis - montagem RA
 
 	#Inicialização das variáveis
-	movq listaOcupados(%rip), %rax	#bloco_aux vai ficar em rax
+	movq listaOcupados, %rax	#bloco_aux vai ficar em rax
 	movq %rax, -8(%rbp)				#bloco_aux
 	movq $0, -16(%rbp)				#bloco_anterior (vai ficar em rbx)
-	movq 8(%rbp), %rcx				#carrega o parâmetro para rcx
+	movq %rdi, %rcx				#carrega o parâmetro para rcx
 	subq $32, %rcx					#acessa o início do bloco auxiliar
 	movq %rcx, -24(%rbp)			#coloca o parâmetro no registrador rcx
 
@@ -133,13 +152,13 @@ liberaMem:
 	movq $0, 0(%rcx)				#libera o bloco selecionado - status = 0 - OBS: CUIDADOO
 	
 	#Adiciona na lista de blocos livres
-	movq listaLivres(%rip), %rcx	#faz o prox_livre do bloco_aux apontar para o início da lista de livres
+	movq listaLivres, %rcx	#faz o prox_livre do bloco_aux apontar para o início da lista de livres
 	movq %rcx, 16(%rax)             # Atualiza prox_livre do novo bloco
-	movq %rax, listaLivres(%rip)	#faz a lista de livres apontar para o primeiro livre (bloco_aux)
+	movq %rax, listaLivres	#faz a lista de livres apontar para o primeiro livre (bloco_aux)
 
 	#Remove da lista de ocupados
 	movq 24(%rax), %rdx				#pega o próximo ocupado do bloco selecionado
-	movq %rdx, listaOcupados(%rip)	#atualiza a lista de ocupados
+	movq %rdx, listaOcupados	#atualiza a lista de ocupados
 
 	jmp junta_e_desmonta_ra			#salta para desmontar o registro de ativação
 	
@@ -148,31 +167,43 @@ proximo_lista:
 
 	#Procura o bloco na lista
 while2:
-	cmpq %rax, %rcx					#enquando bloco_aux != bloco_selecionado
-	je fim_while
+	cmpq %rcx, %rax					#enquando bloco_aux != bloco_selecionado
+	je fim_while2
+	
+	#cmpq $0, %rax                       # NOVO: checa se bloco_aux é NULL
+    #je fim_while2                       # Evita acessar memória inválida
+
 	movq %rax, %rbx					#bloco anterior (rbx) = bloco auxiliar
-	movq 24(%rax), %rax				#bloco auxiliar (rax) = prox_ocupado(bloco_auxiliar) e mantém em rax
+	movq %rax, %r12
+	movq 24(%rax), %r10				#bloco auxiliar (rax) = prox_ocupado(bloco_auxiliar) e mantém em rax
+	movq %r10, %rax
+
+	testq %rax, %rax
+    jz fim_while2
+
 	jmp while2
 
 fim_while2:
 	#Agora, achou os blocos
+    # Achou o bloco: rax = bloco_aux, rbx = bloco_anterior
 
-	movq $0, 0(%rax)				#libera o bloco
+    movq $0, 0(%rax)                # libera o bloco corretamente
 
-	#Adiciona na lista de livres
-	movq listaLivres(%rip), %r9		#faz o prox_livre(bloco_aux) apontar para o início da lista de livres
-	movq %r9, 16(%rax)
-	movq %rax, listaLivres(%rip)	#faz a lista de livres apontar para o primeiro livre (bloco_aux)
+    # Adiciona na lista de livres
+    movq listaLivres, %r9     # r9 = início da lista de livres
+    movq %r9, 16(%rax)              # prox_livre(bloco) = listaLivres
+    movq %rax, listaLivres    # listaLivres = bloco
 
-	#Remove da lista de ocupados
-	movq 24(%rax), %r9
-	movq %r9, 24(%rbx)
+    # Remove da lista de ocupados
+    movq 24(%rax), %r9              # r9 = próximo ocupado
+    movq %r9, 24(%rbx)              # prox_ocupado(bloco_anterior) = prox_ocupado(bloco)
+	
 
 junta_e_desmonta_ra:
 	#Junta os blocos livres
 	call juntaBloco
 
-	addq 24, %rbp				#libera o espaço reservado para as variáveis - desmontagem RA
+	addq $24, %rsp				#libera o espaço reservado para as variáveis - desmontagem RA
 	popq %rbp					#restaura o valor da pilha
 	ret
 #----------------------------------------------------------------------------------------------------------------------
@@ -180,106 +211,131 @@ junta_e_desmonta_ra:
 #Caso encontre, marca como ocupado e retorna o ponteiro para o endereço inicial do bloco
 #Se não encontrar, abre espaço para um novo bloco, com a syscall brk, marca como ocupado e devolve o ponteiro para ele
 alocaMem:
-	pushq %rbp					#antiga posição da pilha - montagem RA
-	movq %rsp, %rbp				#passa a nova altura da pilha - montagem RA
-	subq $24, %rbp				#aloca espaço para as variáveis locais
+    pushq %rbp
+    movq %rsp, %rbp
+    subq $32, %rsp              # Espaço para variáveis locais
 
-	#Inicialização das variáveis locais
-	movq listaLivres(%rip), %rax#ptr_livres = listaLivres
-	movq %rax, -8(%rbp)			#ptr_livres vai ficar em rax
-	movq $0, %rbx				#bloco_anterior = NULL
-	movq %rbx, -16(%rbp)		#blco_anterior vai ficar em rbx
-	movq $0, %rcx				#bloco = NULL
-	movq %rcx, -24(%rbp)		#bloco vai ficar em rcx
+    # Inicialização
+    movq listaLivres, %rax
+    movq %rax, -8(%rbp)         # ptr_livres
+    movq $0, -16(%rbp)          # bloco_anterior
+    movq $0, -24(%rbp)          # bloco
+    #movq 16(%rbp), %rdx         # num_bytes (parâmetro)
+	movq %rdi, %rdx
 
-	#Parâmetro da função
-	movq 8(%rbp), %rdx			#rdx tem num_bytes
-
-	#Procura o bloco na lista de livres
 while3:
-	testq %rax, %rax			#testa se %rax não é nulo
-	je fim_laco3
-	movq 0(%rax), %r8			#guarda o status(ptr_livre) em r8
-	cmpq $0, %r8				#compara se o conteúdo do status é zero
-	jne else					#se não forem iguais, vai para o else atualizar os ponteiros
-	movq 8(%rax), %r9			#coloca tamanho(ptr_livre) em r9
-	cmpq %rdx, %r9				#compara tamanho com num_bytes (tamanho >= num_bytes)
-	jl else						#salta se o tamanho for menor do que num_bytes
-	movq %rax, %rcx				#encontrou o bloco, então coloca em rcx e sai do laço
-	jmp fim_laco3
+    cmpq $0, -8(%rbp)
+    je fim_laco3
+    
+    movq -8(%rbp), %rax
+    cmpq $0, STATUS(%rax)       # Verifica se está livre
+    jne else
+    movq TAMANHO(%rax), %r9
+    cmpq %rdx, %r9              # Verifica se tem tamanho suficiente
+    jl else
+    movq %rax, -24(%rbp)        # Bloco encontrado
+    jmp fim_laco3
 
 else:
-	#Atlualiza os ponteiros
-	movq %rax, %rbx						#move ptr_livres para bloco_anterior
-	movq 16(%rax), %rax					#ptr_livres = prox_livre(ptr_livres)
+    movq -8(%rbp), %rax                # rax = ptr_livre
+    movq %rax, -16(%rbp)               # bloco_anterior = ptr_livre 
+    movq PROX_LIVRE(%rax), %rax
+    movq %rax, -8(%rbp)                # ptr_livre = ptr_livre->prox_livre
+    jmp while3
 
-	jmp while3
 fim_laco3:
-	#Altera as listas
-	testq %rcx, %rcx					#testa se bloco (rcx) é nulo
-	je aloca_novo_bloco				#se for nulo, salta para alocar um novo bloco
+    cmpq $0, -24(%rbp)
+    je aloca_novo_bloco
 
-	#Bloco não é nulo
-	movq $1, 0(%rcx)					#altera o estado do bloco para ocupado
+    # Usar bloco existente
+    movq -24(%rbp), %rcx
+    movq $1, STATUS(%rcx)       # Marca como ocupado
 
-testa_bloco_anterior:
-	#Atualiza ponteiros
-	testq %rbx, %rbx					#testa se o bloco anterior é nulo
-	je	eh_nulo							#é nulo, então salta para eh_nulo
-	movq 16(%rcx), %r10					#remove da lista de livres
-	movq %r10, 16(%rbx)
-	jmp lista_ocupados					#vai ajustar a lista de ocupados
-	
-eh_nulo:								#É nulo, então não tem anterior
-	movq 16(%rcx), %r9					#remove o bloco rcx da lista de livres
-	movq %r9, listaLivres(%rip)
+    cmpq $0, -16(%rbp)
+    je eh_nulo
+    
+    movq -16(%rbp), %rbx               # rbx = bloco_anterior
+    movq PROX_LIVRE(%rcx), %r10
+    movq %r10, PROX_LIVRE(%rbx)
+    jmp lista_ocupados
+
+eh_nulo:
+    movq PROX_LIVRE(%rcx), %r9
+    movq %r9, listaLivres
 
 lista_ocupados:
-	movq $0, 16(%rcx)					#prox_livre(bloco) = 0
-
-	#Ajusta os ponteiros dos blocos ocupados
-	movq listaOcupados(%rip), %r10
-	testq %r10, %r10
-	je lista_nula						#se for nulo, salta para lista_nula
-	movq listaOcupados(%rip), %r9		#prox_ocupado(bloco) = listaOcupados
-	movq %r9, 24(%rcx)
-	movq %rcx, listaOcupados(%rip)		#insere no início
-
-	jmp retorno							#bloco alocado, ponteiros ajustados, então pode retornar
+    movq $0, PROX_LIVRE(%rcx)
+    
+    movq listaOcupados, %r10
+    cmpq $0, %r10
+    je lista_nula
+    
+    movq listaOcupados, %r9
+    movq %r9, PROX_OCUPADO(%rcx)
+    movq %rcx, listaOcupados
+    jmp retorno
 
 lista_nula:
-	movq %rcx, listaOcupados			#então bloco é o primeiro ocupado
-	movq $0, 24(%rcx)					#prox_ocupado(bloco) = null
-
-	jmp retorno							#bloco alocado, ponteiros ajustados então pode retornar
+    movq %rcx, listaOcupados
+    movq $0, PROX_OCUPADO(%rcx)
+    jmp retorno
 
 aloca_novo_bloco:
-	#Abre espaço para o novo bloco
-	movq topoHeap, %rdi					#pega o tamanho atual da heap
-	movq topoHeap, %rcx					#bloco = topoHeap
+    # Calcula tamanho total necessário (alinhado para 16 bytes)
+    movq %rdx, %rsi             # num_bytes
+    addq $32, %rsi              # tamanho do cabeçalho
+    addq $15, %rsi              # alinhamento
+    andq $-16, %rsi             # garante múltiplo de 16
 
-	movq $32, %rsi						#auxiliar recebe 32
-	addq $rdx, %rsi						#soma 32 com num_bytes e guarda no auxiliar
-	addq %rsi, %rdi						#heap recebe o novo topo
-	movq $12, %rax						#coloca o número da syscall em rax
-	syscall
-	movq %rax, topoHeap					#move o novo bloco para o topo da heap para dentro de topoHeap
-	
-	#Atualiza os campos do novo bloco que está em rcx
+    # Obtém endereço atual do topo
+    movq topoHeap, %rcx
+	movq topoHeap, %r12
 
-	movq $1, 0(%rcx)					#status ocupado
-	movq %rdx, 8(%rcx)					#tamanho = num_bytes
-	movq $0, 16(%rcx)					#prox_livre = nulo
+    # Calcula novo topo
+    movq %rcx, %rdi
+    addq %rsi, %rdi
 
-	#Ponteiro de prox_ocupado
-	jmp testa_bloco_anterior
+    # Chama brk para alocar espaço
+    movq $12, %rax
+    syscall
+
+    # Verifica erro
+    cmpq %rdi, %rax
+    jne erro_alocacao
+
+    # Atualiza topoHeap
+    movq %rax, topoHeap
+
+	movq %r12, %rcx
+	movq %rcx, -24(%rbp)
+
+    # Inicializa o novo bloco
+    movq $1, STATUS(%rcx)       # status = ocupado
+    movq %rdx, TAMANHO(%rcx)    # tamanho original (sem cabeçalho)
+    movq $0, PROX_LIVRE(%rcx)
+    movq $0, PROX_OCUPADO(%rcx)
+
+    # Adiciona à lista de ocupados
+    movq listaOcupados, %rdx
+    movq %rdx, PROX_OCUPADO(%rcx)
+    movq %rcx, listaOcupados
+
+	movq %rcx, -24(%rbp)
+
+    jmp retorno
 
 retorno:
-	addq $32, %rcx				#pega o ponteiro para os dados
-	movq %rcx, %rax				#armazena o bloco em rax (retorno da função)
-	addq $24, %rbp				#libera o espaço reservado para as variáveis locais - desmontagem RA
-	popq %rbp					#restaura o valor da altura da pilha - desmontagem - RA
-	ret
+    movq -24(%rbp), %rax
+    addq $32, %rax             # Retorna ponteiro para dados
+    addq $32, %rsp
+    popq %rbp
+    ret
+
+erro_alocacao:
+    movq $0, %rax              # Retorna NULL em caso de erro
+    addq $32, %rsp
+    popq %rbp
+    ret
 #----------------------------------------------------------------------------------------------------------------------
 #Imprime o mapa da heap
 #Blocos gerenciais impressos com '#'
@@ -291,12 +347,15 @@ imprimeMapa:
 	pushq %r12							#vai ser usado para contadores
 	subq $8, %rsp						#alinha a pilha para 16 bytes 
 
-	#Inicializa o ponteiro dos blocos
-	movq inicioHeap(%rip), %rbx			#prt_bloco = inicioHeap
+	movq inicioHeap, %rbx
+	#Inicimapa_loop:
+    #Verifica se chegou ao final da heap
+    cmpq topoHeap, %rbx         #compara prt_bloco com topoHeap
+    jge fim_mapa                        #se for maior ou igual que topoHeap, termina
 
 mapa_loop:
 	#Verifica se chegou ao final da heap
-	cmpq topoHeap(%rip), %rbx			#compara prt_bloco com topoHeap
+	cmpq topoHeap, %rbx			#compara prt_bloco com topoHeap
 	jge fim_mapa						#se for maior ou igual que topoHeap, termina
 
 	#Imprime dados gerenciais '#'
@@ -305,7 +364,7 @@ cabecalho_loop:
 	#Configura syscall write (1, '#', 1)
 	movq $1, %rax						#número da syscall write
 	movq $1, %rdi						#stdout = 1
-	leaq hash_symbol(%rip), %rsi		#endereço do caractere '#'
+	leaq hash_symbol, %rsi		#endereço do caractere '#'
 	movq $1, %rdx						#número de bytes para escrever
 
 	pushq %r12							#preserva o contador, porque a syscall pode alterar o valor
@@ -313,7 +372,11 @@ cabecalho_loop:
 	popq %r12							#restaura o contador
 
 	decq %r12							#decrementa o contador i--
-	jnz cabecalho_loop
+	jnz cabecalho_loop  
+saiu_laco_cabecalho:
+
+	cmpq topoHeap, %rbx
+    jge fim_mapa
 
 	#Determina o símbolo para imprimir '+' ou '-'
 	cmpq $0, 0(%rbx)					#verifica o status do bloco
@@ -327,18 +390,23 @@ bloco_livre:
 imprime_dados:
 	#Tamanho vezes símbolo
 	movq 8(%rbx), %rcx					#carrega o tamanho do bloco em rcx
-	testq %rcx, %rcx					#verifica se o tamanho não é nulo
-	jz proximo_bloco					#se o tamanho for zero, pula para o próximo bloco
+
+	testq %rcx, %rcx
+	jz proximo_bloco
 
 dados_loop:
-	#Imprime o símbolo
-	movq %r12, %rsi						#coloca o símbolo em rsi
-	movq $1, %rax						#write
-	movq $1, %rdi						#stdout
-	movq $1, %rdx						#tamanho 1
-	syscall
+	movb %r12b, char_buffer
 
-	loop dados_loop						#decrementa o tamanho (rcx) e repeta se rcx > 0
+	pushq %rcx
+    movq $1, %rax            # syscall write
+    movq $1, %rdi            # stdout
+    leaq char_buffer, %rsi   # endereço do caractere
+    movq $1, %rdx            # tamanho 1 byte
+    syscall
+	popq %rcx
+
+	decq %rcx
+	jnz dados_loop    
 
 proximo_bloco:
 	#Avança para o próximo bloco na heap
@@ -350,12 +418,13 @@ proximo_bloco:
 
 fim_mapa:
 	#Finalização: imprime nova linha e restaura os registradores
-	movq $'\n', %rdi					#carrega o caractere nova linha
-	movq %rdi, %rsi						#coloca o símbolo em rsi
-	movq $1, %rax						#write
-	movq $1, %rdi						#stdout
-	movq $1, %rdx						#tamanho 1
+	pushq $'\n' # imprime uma nova linha
+	movq $1, %rax
+	movq $1, %rdi
+	movq %rsp, %rsi
+	movq $1, %rdx
 	syscall
+	addq $8, %rsp
 
 	#Desmontagem do RA
 	addq $8, %rsp						#remove o espaço de alinhamento
@@ -377,32 +446,40 @@ main:
     call imprimeMapa
 
     # a = alocaMem(10)
-    movq $10, %rdi
+    #pushq $5
+	movq $5, %rdi
     call alocaMem
-    movq %rax, -8(%rbp)         # Armazena 'a' na stack
+    addq $8, %rsp
+    movq %rax, -8(%rbp)
 
-    # imprimeMapa() - ################**********
+    # imprimeMapa() - #################**********
     call imprimeMapa
-    # b = alocaMem(4)
-    movq $4, %rdi
+    
+	# b = alocaMem(4)
+    #movq $4, %rdi
+	pushq $4
     call alocaMem
+	addq $8, %rsp
     movq %rax, -16(%rbp)        # Armazena 'b' na stack
 
-    # imprimeMapa() - ################**********##############****
+    #imprimeMapa() - ################**********##############****
     call imprimeMapa
 
     # liberaMem(a)
     movq -8(%rbp), %rdi
+	#pushq -8(%rbp)
     call liberaMem
+    movq $'-', %r12 
 
     # imprimeMapa() - ################----------##############****
     call imprimeMapa
 
     # liberaMem(b)
     movq -16(%rbp), %rdi
+	#pushq -16(%rbp)
     call liberaMem
 
-    # imprimeMapa() - resultado final
+    #imprimeMapa() - resultado final
     call imprimeMapa
 
     # finalizaAlocador()
