@@ -24,6 +24,8 @@ newline:
 	inicioHeap:		.quad 0
 	listaLivres:	.quad 0			#Lista dos nós livres
 	listaOcupados:	.quad 0			#Lista dos nós ocupadosi
+	
+	tamanho: .quad 0
 #--------------------------------------------------------------
 
 .section .bss
@@ -45,9 +47,9 @@ iniciaAlocador:
     movq $12, %rax      # syscall brk
     xorq %rdi, %rdi     # argumento 0 (obter topo atual)
     syscall
-    movq %rax, topoInicialHeap
-    movq %rax, inicioHeap
-    movq %rax, topoHeap
+    movq %rax, (topoInicialHeap)
+    movq %rax, (inicioHeap)
+    movq %rax, (topoHeap)
     
     popq %rbp
     ret
@@ -250,6 +252,7 @@ fim_laco3:
     # Usar bloco existente
     movq -24(%rbp), %rcx
     movq $1, STATUS(%rcx)       # Marca como ocupado
+    movq %rdx, TAMANHO(%rcx)
 
     cmpq $0, -16(%rbp)
     je eh_nulo
@@ -304,7 +307,7 @@ aloca_novo_bloco:
     jne erro_alocacao
 
     # Atualiza topoHeap
-    movq %rax, topoHeap
+    movq %rax, (topoHeap)
 
 	movq %r12, %rcx
 	movq %rcx, -24(%rbp)
@@ -355,8 +358,12 @@ imprimeMapa:
 
 mapa_loop:
 	#Verifica se chegou ao final da heap
-	cmpq topoHeap, %rbx			#compara prt_bloco com topoHeap
-	jge fim_mapa						#se for maior ou igual que topoHeap, termina
+	cmpq (topoHeap), %rbx			#compara prt_bloco com topoHeap
+	#jge fim_mapa						#se for maior ou igual que topoHeap, termina
+	ja fim_mapa
+	
+#	testq %rbx, %rbx
+#	jmp proximo_bloco
 
 	#Imprime dados gerenciais '#'
 	movq $32, %r12						#inicializa contador com i = 32
@@ -390,7 +397,8 @@ bloco_livre:
 imprime_dados:
 	#Tamanho vezes símbolo
 	movq 8(%rbx), %rcx					#carrega o tamanho do bloco em rcx
-
+	#movq 8(%rbx), tamanho
+	
 	testq %rcx, %rcx
 	jz proximo_bloco
 
@@ -447,7 +455,7 @@ main:
 
     # a = alocaMem(10)
     #pushq $5
-	movq $5, %rdi
+    movq $5, %rdi
     call alocaMem
     addq $8, %rsp
     movq %rax, -8(%rbp)
@@ -457,9 +465,9 @@ main:
     
 	# b = alocaMem(4)
     #movq $4, %rdi
-	pushq $4
+    movq $4, %rdi
     call alocaMem
-	addq $8, %rsp
+    addq $8, %rsp
     movq %rax, -16(%rbp)        # Armazena 'b' na stack
 
     #imprimeMapa() - ################**********##############****
