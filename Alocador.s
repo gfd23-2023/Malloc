@@ -96,24 +96,34 @@ while1:
 
 	#Verifica se os blocos são vizinhos fisicamente na memória
 	movq -16(%rbp), %rbx		#coloca o 'proximo' em rbx
-	movq 8(%rax), %rdx			#acessa o campo de tamanho(bloco) e guarda em rdx
-	addq $32, %rdx				#soma 32 para acessar o campo de dados do bloco
-	cmpq %rbx, %rdx				#verifica se os endereços são iguais, caso sejam, vai fundir os blocos
+#	movq 8(%rax), %rdx			#acessa o campo de tamanho(bloco) e guarda em rdx
+#	addq $32, %rdx				#soma 32 para acessar o campo de dados do bloco
+#	cmpq %rbx, %rdx				#verifica se os endereços são iguais, caso sejam, vai fundir os blocos
+	movq %rbx, %r12
+	movq %rax, %r9
+	subq %r12, %r9
+	cmpq $48, %r9
 	jne nao_fundiu
 
 	#Fundiu, então, atualiza o tamanho do blocão (bloco em rax e rdx, proximo em rbx e rcx)
 	movq 8(%rbx), %rcx          # tamanho do proximo
 	movq 8(%rax), %rdx          # tamanho do bloco
 	addq %rdx, %rcx
-	addq $32, %rcx              # soma cabeçalho do proximo
-	movq %rcx, 8(%rax)          # atualiza novo tamanho no bloco fundido
+#	addq $32, %rcx              # soma cabeçalho do proximo
+	movq %rcx, 8(%rbx)          # atualiza novo tamanho no bloco fundido
 
 fim_fusao:
 	#Atualiza os ponteiros do blocão fundido
-	movq 16(%rbx), %rcx         # pega prox_livre do proximo
-	movq %rcx, 16(%rax)         # atualiza no bloco fundido
+#	movq 16(%rax), %rcx         # pega prox_livre do proximo
+#	movq %rcx, 16(%rbx)         # atualiza no bloco fundido
 
-	movq %rdx, -8(%rbp)			#avança para o próximo bloco
+	#movq %rdx, -8(%rbp)			#avança para o próximo bloco
+
+	movq listaLivres, %r10
+	movq 16(%r10), %r9
+	movq %r9, listaLivres
+
+	movq 16(%rbx), %rax
 
 	jmp while1
 	
@@ -355,6 +365,9 @@ imprimeMapa:
 
 mapa_loop:
 	#Verifica se chegou ao final da heap
+	#cmpq $0, (%rbx)
+	#je fim_mapa
+
 	cmpq topoHeap, %rbx			#compara prt_bloco com topoHeap
 	jge fim_mapa						#se for maior ou igual que topoHeap, termina
 
@@ -389,8 +402,9 @@ bloco_livre:
 
 imprime_dados:
 	#Tamanho vezes símbolo
-	movq 8(%rbx), %rcx					#carrega o tamanho do bloco em rcx
-
+	xorq %rcx, %rcx
+	movb 8(%rbx), %cl					#carrega o tamanho do bloco em rcx
+	
 	testq %rcx, %rcx
 	jz proximo_bloco
 
@@ -410,8 +424,10 @@ dados_loop:
 
 proximo_bloco:
 	#Avança para o próximo bloco na heap
-	movq 8(%rbx), %rax					#carrega o tamanho do bloco
+#	movq 8(%rbx), %rax					#carrega o tamanho do bloco
+	xorq %rax, %rax						#zera rax
 	addq $32, %rax						#soma ao tamanho do cabeçalho
+	addq $16, %rax						#ALINHAMENTO
 	addq %rax, %rbx						#avança prt_bloco para o próximo bloco
 
 	jmp mapa_loop						#volta para o início do bloco
@@ -442,32 +458,30 @@ main:
     # iniciaAlocador()
     call iniciaAlocador
 
-    # imprimeMapa() - vazio
     call imprimeMapa
 
     # a = alocaMem(10)
-    #pushq $5
 	movq $5, %rdi
     call alocaMem
-    addq $8, %rsp
-    movq %rax, -8(%rbp)
+#    addq $8, %rsp
+    movq %rax, 8(%rsp)
 
     # imprimeMapa() - #################**********
     call imprimeMapa
     
 	# b = alocaMem(4)
-    #movq $4, %rdi
-	pushq $4
+	xorq %rdi, %rdi
+    movq $4, %rdi
     call alocaMem
-	addq $8, %rsp
-    movq %rax, -16(%rbp)        # Armazena 'b' na stack
+#	addq $8, %rsp
+    movq %rax, (%rsp)        # Armazena 'b' na stack
 
     #imprimeMapa() - ################**********##############****
     call imprimeMapa
 
     # liberaMem(a)
-    movq -8(%rbp), %rdi
-	#pushq -8(%rbp)
+#    movq (%rsp), %rdi #antes
+	movq 8(%rsp), %rdi
     call liberaMem
     movq $'-', %r12 
 
@@ -475,9 +489,9 @@ main:
     call imprimeMapa
 
     # liberaMem(b)
-    movq -16(%rbp), %rdi
-	#pushq -16(%rbp)
-    call liberaMem
+#    movq -16(%rsp), %rdi	#antes
+	movq (%rsp), %rdi
+	call liberaMem
 
     #imprimeMapa() - resultado final
     call imprimeMapa
